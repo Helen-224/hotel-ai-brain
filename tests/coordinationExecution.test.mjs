@@ -15,9 +15,15 @@ const h=await import(moduleUrl('src/data/hotelDemo.ts'));
 const r=await import(moduleUrl('src/data/resourceCoordination.ts'));
 const a=await import(moduleUrl('src/data/agentAnalysis.ts'));
 const x=await import(moduleUrl('src/data/coordinationExecution.ts'));
+const execution=await import(moduleUrl('src/data/taskExecution.ts'));
 const seedSnapshot=JSON.stringify([h.businessTasks,h.rooms,h.bookings,h.maintenanceOrders,h.employees,h.shifts,h.operationEvents]);
 const initial=()=>({events:structuredClone(h.operationEvents),revision:0,taskOverrides:{},supportReservations:[],executionPlans:[]});
-const command=(state,eventId,action,taskId)=>({...state,events:h.transitionEvents(state.events,eventId,action,taskId,state)});
+const command=(state,eventId,action,taskId)=>{
+ if(action!=='advance')return {...state,events:h.transitionEvents(state.events,eventId,action,taskId,state)};
+ const task=h.currentBusinessTasks(state.events,state).find(t=>t.id===taskId);
+ const result=execution.executeTask(state,{eventId,taskId,action:task.executionStatus==='pending'?'start':'complete',actorEmployeeId:task.assignedEmployeeId,occurredAt:new Date().toISOString()});
+ assert.ok(result.ok,result.message);return result.state;
+};
 function fixture(){
  const state=command(initial(),'breakfast','approve');const event=state.events.find(e=>e.id==='breakfast');
  const report=a.analyzeOperations(event,state.events,state);const candidates=r.generateProposals(event,state.events,report,state);
@@ -111,4 +117,84 @@ test('original shared tasks, maintenance realtime state and result verification 
  assert.equal(h.currentBusinessTasks(state.events,state).find(t=>t.id===clean.id).verificationStatus,'unverified');assert.equal(h.businessSummary(state.events,state).unprepared,18);assert.notEqual(state.events[0].resolutionStatus,'resolved');
  state=command(state,'breakfast','approve');state=command(state,'breakfast','create');const count=state.events.find(e=>e.id==='breakfast').records.length;const again=command(state,'breakfast','create');assert.equal(again.events.find(e=>e.id==='breakfast').records.length,count);
  assert.equal(new Set(h.currentBusinessTasks(state.events,state).map(t=>t.id)).size,h.businessTasks.length);
+});
+
+// 0.4.2.2-A: unified execution, actor validation, exceptions and immutable verification.
+const taskCommand=(state,taskId,action,extra={})=>({eventId:'arrival',taskId,action,actorEmployeeId:h.currentBusinessTasks(state.events,state).find(t=>t.id===taskId)?.assignedEmployeeId||'E-ENG-1',occurredAt:new Date(Date.now()+2000).toISOString(),...extra});
+const approved=()=>command(initial(),'arrival','approve');
+function taskRejects(state,input,pattern){
+ const snapshot=JSON.stringify(state);const result=execution.executeTask(state,input);assert.equal(result.ok,false,result.message);assert.match(result.message,pattern);assert.strictEqual(result.state,state);assert.equal(JSON.stringify(state),snapshot);
+}
+function taskSuccess(state,input){const snapshot=JSON.stringify(state);const result=execution.executeTask(state,input);assert.ok(result.ok,result.message);assert.equal(JSON.stringify(state),snapshot);return result.state;}
+test('A: dependencies, maintenance blockers, owner, approval and invalid context deny without writes',()=>{
+ const state=approved();taskRejects(state,taskCommand(state,'T-CLEAN-2','start'),/前置任务|维修阻塞/);
+ taskRejects(state,taskCommand(state,'T-M-1','start',{actorEmployeeId:'E-HK-1'}),/有效负责人/);
+ taskRejects(state,taskCommand(state,'missing','start'),/不存在/);
+ taskRejects(state,taskCommand(state,'T-M-1','start',{eventId:'vip'}),/不属于/);
+ const pending=initial();taskRejects(pending,taskCommand(pending,'T-M-1','start'),/审批/);
+ taskRejects(state,taskCommand(state,'T-M-1','start',{occurredAt:'invalid'}),/时间无效/);
+ taskRejects(state,taskCommand(state,'T-M-1','bypass'),/不支持/);
+ assert.strictEqual(h.transitionEvents(state.events,'arrival','advance','T-M-1',state),state.events,'legacy no-actor advance cannot bypass unified engine');
+});
+test('A: begin/complete are one-way, deduplicated and capture real caller timestamps',()=>{
+ const state=approved();taskRejects(state,taskCommand(state,'T-M-1','complete'),/仅进行中/);
+ const start=taskCommand(state,'T-M-1','start',{occurredAt:'2026-11-02T09:00:00+08:00',note:'已核对预约'});const running=taskSuccess(state,start);
+ assert.equal(running.executionRecords.length,1);taskRejects(running,start,/不重复开始/);
+ taskRejects(running,taskCommand(running,'T-M-1','complete',{occurredAt:'2026-11-02T08:00:00+08:00'}),/时间不能早于/);
+ taskRejects(running,taskCommand(running,'T-M-1','complete',{actorEmployeeId:'E-HK-1'}),/负责人/);
+ const done=taskSuccess(running,taskCommand(running,'T-M-1','complete',{occurredAt:'2026-11-02T09:20:00+08:00'}));
+ const task=h.currentBusinessTasks(done.events,done).find(t=>t.id==='T-M-1');assert.equal(task.actualStartedAt,start.occurredAt);assert.equal(task.actualCompletedAt,'2026-11-02T09:20:00+08:00');assert.equal(task.completedBy,'E-ENG-1');assert.equal(task.verificationStatus,'unverified');assert.equal(done.executionRecords.length,2);assert.equal(h.businessSummary(done.events,done).unfinishedMaintenance,5);
+ taskRejects(done,taskCommand(done,'T-M-1','complete',{occurredAt:'2026-11-02T09:21:00+08:00'}),/仅进行中/);taskRejects(done,taskCommand(done,'T-M-1','start',{occurredAt:'2026-11-02T09:21:00+08:00'}),/仅待执行/);
+ assert.equal(done.events[0].resolutionStatus,'open');assert.equal(done.events[0].verificationStatus,'unverified');
+});
+test('A: per-room dependency chain and independent parallel work are preserved',()=>{
+ let state=approved();state=command(state,'arrival','create');state=taskSuccess(state,taskCommand(state,'T-M-1','start'));
+ state=taskSuccess(state,taskCommand(state,'T-FRONT-CHECK','start')); // independent employee / independent chain
+ taskRejects(state,taskCommand(state,'T-M-2','start'),/还有进行中/);
+ state=taskSuccess(state,taskCommand(state,'T-M-1','complete'));state=taskSuccess(state,taskCommand(state,'T-CLEAN-1','start'));
+ taskRejects(state,taskCommand(state,'T-CHECK-1','start'),/前置任务/);
+ taskRejects(state,taskCommand(state,'T-CLEAN-2','start'),/前置任务|维修阻塞/);
+ state=taskSuccess(state,taskCommand(state,'T-CLEAN-1','complete'));state=taskSuccess(state,taskCommand(state,'T-CHECK-1','start'));
+ state=taskSuccess(state,taskCommand(state,'T-CHECK-1','complete'));assert.equal(h.businessSummary(state.events,state).unprepared,18);
+ taskRejects(state,taskCommand(state,'T-DELIVER-1','start'),/还有进行中/);
+ state=taskSuccess(state,taskCommand(state,'T-FRONT-CHECK','complete'));state=taskSuccess(state,taskCommand(state,'T-DELIVER-1','start'));state=taskSuccess(state,taskCommand(state,'T-DELIVER-1','complete'));
+ assert.equal(h.rooms[0].housekeepingStatus,'dirty');assert.equal(h.currentBusinessTasks(state.events,state).find(t=>t.id==='T-DELIVER-1').verificationStatus,'unverified');assert.equal(state.events[0].resolutionStatus,'open');
+});
+test('A: shared task has one status and operation history, even before other event links it',()=>{
+ let state=approved();state=command(state,'arrival','create');state=command(state,'breakfast','approve');
+ state=taskSuccess(state,taskCommand(state,'T-FRONT-CHECK','start'));state=command(state,'breakfast','create');
+ for(const event of state.events.filter(e=>['arrival','breakfast'].includes(e.id)))assert.equal(event.tasks.find(t=>t.id==='T-FRONT-CHECK').status,'in_progress');
+ state=taskSuccess(state,taskCommand(state,'T-FRONT-CHECK','complete',{eventId:'breakfast'}));
+ assert.equal(state.executionRecords.filter(r=>r.taskId==='T-FRONT-CHECK').length,2);assert.deepEqual(state.executionRecords[0].relatedEventIds,['arrival','breakfast']);
+ assert.equal(state.events.find(e=>e.id==='arrival').tasks.find(t=>t.id==='T-FRONT-CHECK').status,'completed');assert.equal(h.currentBusinessTasks(state.events,state).length,h.businessTasks.length);
+});
+test('A: reports do not alter task arrangement, status, approval, support or verification',()=>{
+ let state=approved();const before=h.currentBusinessTasks(state.events,state),version=h.businessFingerprint(state.events,state);
+ state=taskSuccess(state,taskCommand(state,'T-M-1','report_exception',{exceptionType:'new_issue',note:'发现新的异响，需人工复核'}));
+ assert.deepEqual(h.currentBusinessTasks(state.events,state),before);assert.notEqual(h.businessFingerprint(state.events,state),version);assert.deepEqual(state.taskOverrides,{});assert.deepEqual(state.executionPlans,[]);assert.deepEqual(state.supportReservations,[]);assert.equal(state.events[0].approval,'approved');assert.equal(state.executionRecords[0].action,'exception_reported');taskRejects(state,taskCommand(state,'T-M-1','start'),/尚未解除的执行异常/);
+ const duplicate=execution.executeTask(state,taskCommand(state,'T-M-1','report_exception',{exceptionType:'new_issue',note:'发现新的异响，需人工复核'}));assert.strictEqual(duplicate.state,state);assert.equal(state.executionRecords.length,1);
+ taskRejects(state,taskCommand(state,'T-M-1','report_exception',{exceptionType:'delay',note:'  '}),/说明/);taskRejects(state,taskCommand(state,'T-M-1','report_exception',{exceptionType:'invented',note:'test'}),/类型/);
+});
+test('A: manager acknowledgement/close are independent and retain actor, note and time',()=>{
+ let state=approved();state=taskSuccess(state,taskCommand(state,'T-M-1','report_exception',{exceptionType:'employee_unavailable',note:'临时无法到岗',occurredAt:'2026-11-02T09:00:00+08:00'}));const exceptionId=state.executionExceptions[0].exceptionId;const tasks=h.currentBusinessTasks(state.events,state);
+ const handling={exceptionId,action:'acknowledge',actorName:'演示管理者',note:'已联系工程负责人核实，暂不调整安排',occurredAt:'2026-11-02T09:01:00+08:00'};
+ const before=JSON.stringify(state);const invalid=execution.handleExecutionException(state,{...handling,note:' '});assert.equal(invalid.ok,false);assert.strictEqual(invalid.state,state);assert.equal(JSON.stringify(state),before);
+ let result=execution.handleExecutionException(state,handling);assert.ok(result.ok);state=result.state;assert.equal(state.executionExceptions[0].status,'acknowledged');taskRejects(state,taskCommand(state,'T-M-1','start',{occurredAt:'2026-11-02T09:01:30+08:00'}),/尚未解除的执行异常/);
+ result=execution.handleExecutionException(state,handling);assert.equal(result.ok,false);assert.strictEqual(result.state,state);
+ result=execution.handleExecutionException(state,{...handling,action:'close',note:'确认可按原安排执行；未调整资源',occurredAt:'2026-11-02T09:02:00+08:00'});assert.ok(result.ok);state=result.state;
+ assert.deepEqual(h.currentBusinessTasks(state.events,state),tasks);assert.equal(state.executionExceptions[0].handlingRecords.length,2);assert.equal(state.executionExceptions[0].status,'closed');assert.equal(state.executionRecords.length,1);assert.equal(state.events[0].resolutionStatus,'open');
+ result=execution.handleExecutionException(state,{...handling,action:'close'});assert.equal(result.ok,false);assert.strictEqual(result.state,state);const resumed=taskSuccess(state,taskCommand(state,'T-M-1','start',{occurredAt:'2026-11-02T09:03:00+08:00'}));assert.equal(h.currentBusinessTasks(resumed.events,resumed).find(t=>t.id==='T-M-1').executionStatus,'in_progress');
+});
+test('A: applied arrangement is authoritative; execution links plan and invalidates old analysis',()=>{
+ const {state,proposal}=fixture();const applied=x.applyApprovedProposal(state,proposal,meta());assert.ok(applied.ok);let next=applied.state;const report=a.analyzeOperations(next.events.find(e=>e.id==='breakfast'),next.events,next);
+ taskRejects(next,taskCommand(next,'T-FRONT-CHECK','start',{eventId:'breakfast',actorEmployeeId:'E-FRONT-1'}),/负责人/);
+ const input=taskCommand(next,'T-FRONT-CHECK','start',{eventId:'breakfast',actorEmployeeId:'E-FLEX-1'});next=taskSuccess(next,input);
+ assert.equal(next.executionRecords[0].executionPlanId,applied.plan.executionPlanId);assert.notEqual(report.fingerprint,h.businessFingerprint(next.events,next));assert.equal(next.executionPlans[0].status,'applied');assert.deepEqual(next.taskOverrides,applied.state.taskOverrides);assert.deepEqual(next.supportReservations,applied.state.supportReservations);
+ assert.equal(x.applyApprovedProposal(next,proposal,meta()).state,next);assert.equal(h.currentBusinessTasks(next.events,next).find(t=>t.id==='T-FRONT-CHECK').verificationStatus,'unverified');
+});
+test('A: invalid current arrangement and frozen state cannot bypass checks or mutate seeds',()=>{
+ let state=approved();state.taskOverrides={'T-M-1':{assignedEmployeeId:'E-HK-1',plannedStartAt:'2026-11-01T06:00:00+08:00',plannedEndAt:'2026-11-01T06:30:00+08:00'}};
+ taskRejects(state,taskCommand(state,'T-M-1','start'),/技能|维修入房/);
+ state=approved();const freeze=value=>{if(value&&typeof value==='object'){Object.values(value).forEach(freeze);Object.freeze(value);}return value;};freeze(state);const running=taskSuccess(state,taskCommand(state,'T-M-1','start'));assert.equal(running.executionRecords.length,1);
+ assert.equal(JSON.stringify([h.businessTasks,h.rooms,h.bookings,h.maintenanceOrders,h.employees,h.shifts,h.operationEvents]),seedSnapshot);
 });
