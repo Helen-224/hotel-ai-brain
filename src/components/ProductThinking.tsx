@@ -1,1 +1,22 @@
-export function ProductThinking(){return <><section id="why" className="collaboration-thinking"><span className="eyebrow">01 / 为什么需要 Hotel AI Brain</span><h2>经营结果，来自整座酒店的协同行动。</h2><div className="thinking-intro"><p>酒店运营不是单个系统、岗位或部门能够独立完成的工作。专业系统管理不同业务，而角色之间的信息协同、任务联动与判断执行，需要围绕共同目标组织起来。</p><p>Hotel AI Brain 希望在现有业务系统之上建立智能协调层，从局部业务管理走向全局运营协同。以下是产品设计关注、仍需验证的问题，并非全行业统计结论。</p></div><div className="positioning-problems">{[['信息分散','预订、房态与沟通渠道的信息，需要放在同一业务语境中理解。'],['资源冲突','客房、工程与服务工作，可能争用有限的人力与时间。'],['缺少全局判断','单个部门完成任务，不代表入住准备、服务质量与经营目标已整体达成。']].map(([title,copy],i)=><article key={title}><span>0{i+1}</span><h3>{title}</h3><p>{copy}</p></article>)}</div></section><section id="questions"><span className="eyebrow">02 / 产品理念</span><h2>从数据感知，走向有依据的经营决策。</h2><div className="thinking-intro"><p>不替代 PMS 或其他专业系统，也不止于回答问题。通过统一的酒店业务认知，让 AI 理解经营目标、业务关系与部门依赖，再组织 Agent 协作。</p><p>以跨部门智能协调为核心，以经营分析与优化为上层价值。方案需要比较资源约束，重要决策始终保留人的经验、判断、审批和授权。</p></div><ol className="decision-flow">{[['感知与理解','关联数据与经营目标'],['发现与分析','识别问题、依赖与冲突'],['模拟与比较','比较人力、时间和服务影响'],['审批与行动','管理者判断并授权执行'],['验证与优化','追踪结果，回看经营目标']].map(([title,copy])=><li key={title}><strong>{title}</strong><span>{copy}</span></li>)}</ol><div className="problem-example"><div className="example-heading"><h3>放在一起，才能看见运营全局。</h3><span>虚构酒店 · 全部为模拟数据</span></div><div className="example-inputs">{[['95%','明日预计入住率','预订 / PMS'],['18 间','客房尚未准备','客房管理'],['6 项','维修尚未完成','工程维修'],['8 间','VIP 预订','CRM / 预订'],['15:00—18:00','入住高峰','预订时段汇总']].map(m=><div key={m[1]}><small>{m[2]}</small><strong>{m[0]}</strong><span>{m[1]}</span></div>)}</div><p>将入住准备目标与房间、维修及排班关联，才能判断哪里需要协调；再比较资源安排，由管理者选择方案。上述数字本身不足以证明冲突已发生，资源模拟与多方案自动比较尚属规划。</p><a className="text-link" href="#architecture">了解五层架构如何支撑协同 →</a></div></section></>}
+export function ProductThinking() {
+  const links = [
+    ['系统各自记录', '预订、房态、维修和排班分散在不同业务环节。'],
+    ['工作彼此关联', '一间房的维修进度会影响清洁安排与交房确认。'],
+    ['需要中心协调', '管理者要看清影响、安排先后，并跟进执行反馈。'],
+  ];
+  return <section id="why" className="collaboration-thinking">
+    <span className="eyebrow">01 / 产品构想</span>
+    <h2>让酒店信息汇成全局，让协作围绕同一目标。</h2>
+    <div className="thinking-intro">
+      <p>我希望 Hotel AI Brain 成为酒店的智能辅助大脑：汇集各部门运营信息，帮助管理者看清问题与任务之间的关系，再把需要处理的工作协调到相关岗位。</p>
+      <p>员工能更快获得清楚的任务和必要上下文，减少查找与交接成本；酒店也能更及时地回应住客需求。人仍负责判断、审批和重要决策。</p>
+    </div>
+    <div className="positioning-problems">{links.map(([title, copy], i) => <article key={title}><span>0{i + 1}</span><h3>{title}</h3><p>{copy}</p></article>)}</div>
+    <div className="idea-flow" aria-label="产品构想流程">
+      <div><small>输入</small><strong>酒店信息</strong><span>预订、房态、维修、排班</span></div><b aria-hidden="true">→</b>
+      <div className="idea-flow-core"><small>中心枢纽</small><strong>分析与协调</strong><span>关联问题，组织任务</span></div><b aria-hidden="true">→</b>
+      <div><small>行动</small><strong>部门执行</strong><span>接收任务，反馈进度</span></div>
+    </div>
+    <p className="idea-caption">信息汇入中心，任务走向岗位，执行情况回到管理视图。</p>
+  </section>;
+}

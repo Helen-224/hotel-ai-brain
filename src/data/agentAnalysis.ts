@@ -1,6 +1,6 @@
 import {businessFingerprint,type BusinessContext,bookings,rooms,employees,shifts,operatingGoals,snapshot,businessSummary,currentBusinessTasks,currentMaintenanceOrders,isBusinessTaskBlocked,breakfastDemand,breakfastCoverage,employeeLoad,type OperationEvent} from './hotelDemo';
 export interface AgentFinding {agent:string;risk:'高'|'中'|'低';facts:string[];evidence:string[];impact:string;reason:string;unknowns:string[]}
-export interface AgentReport {eventId:string;fingerprint:string;agents:AgentFinding[];links:{title:string;risk:string;evidence:string[];judgment:string}[];conclusion:string;goals:string[]}
+export interface AgentReport {managerNote?:string;reviewed?:boolean;eventId:string;fingerprint:string;agents:AgentFinding[];links:{title:string;risk:string;evidence:string[];judgment:string}[];conclusion:string;goals:string[]}
 export function analyzeOperations(event:OperationEvent,events:OperationEvent[],view:BusinessContext={}):AgentReport {
  const tasks=currentBusinessTasks(events,view),orders=currentMaintenanceOrders(events,view),summary=businessSummary(events,view);
  const roomIds=new Set(event.businessRefs?.roomIds||[]);const scopedRooms=rooms.filter(r=>roomIds.has(r.id));const scopedTasks=tasks.filter(t=>event.businessRefs?.businessTaskIds.includes(t.id));

@@ -198,3 +198,63 @@ test('A: invalid current arrangement and frozen state cannot bypass checks or mu
  state=approved();const freeze=value=>{if(value&&typeof value==='object'){Object.values(value).forEach(freeze);Object.freeze(value);}return value;};freeze(state);const running=taskSuccess(state,taskCommand(state,'T-M-1','start'));assert.equal(running.executionRecords.length,1);
  assert.equal(JSON.stringify([h.businessTasks,h.rooms,h.bookings,h.maintenanceOrders,h.employees,h.shifts,h.operationEvents]),seedSnapshot);
 });
+
+const staff=await import(moduleUrl('src/data/staffExecution.ts'));
+test('B: identity filters only current assigned tasks; no identity/unknown gives empty list',()=>{
+ const state=initial();assert.deepEqual(staff.staffTasks(state.events,state),[]);
+ for(const employee of h.employees){const view={...state,currentEmployeeId:employee.id};const tasks=staff.staffTasks(view.events,view);assert.deepEqual(tasks.map(i=>i.task.id),h.currentBusinessTasks(view.events,view).filter(t=>t.assignedEmployeeId===employee.id).map(t=>t.id));assert.equal(new Set(tasks.map(i=>i.task.id)).size,tasks.length);}
+ assert.deepEqual(staff.staffTasks(state.events,{...state,currentEmployeeId:'invalid'}),[]);
+});
+test('B: applied reassignment removes original owner, support never creates staff tasks',()=>{
+ const {state,proposal}=fixture();const result=x.applyApprovedProposal(state,proposal,meta());assert.ok(result.ok);const next=result.state;
+ const original=staff.staffTasks(next.events,{...next,currentEmployeeId:'E-FRONT-1'});const moved=staff.staffTasks(next.events,{...next,currentEmployeeId:'E-FLEX-1'});
+ assert.ok(!original.some(i=>i.task.id==='T-FRONT-CHECK'));assert.equal(moved.filter(i=>i.task.id==='T-FRONT-CHECK').length,1);assert.equal(original.some(i=>next.supportReservations.some(r=>r.reservationId===i.task.id)),false);
+ assert.equal(staff.staffTasks(next.events,{...next,currentEmployeeId:'E-HK-7'}).length,0);
+});
+test('B: selected identity enforced at dispatch and A engine; shared records remain unique',()=>{
+ let state={...approved(),currentEmployeeId:'E-HK-1'};const request=taskCommand(state,'T-M-1','start');let result=staff.executeStaffTask(state,request);assert.equal(result.ok,false);assert.strictEqual(result.state,state);
+ result=staff.executeStaffTask(state,{...request,actorEmployeeId:'E-HK-1'});assert.equal(result.ok,false);assert.strictEqual(result.state,state);
+ state={...state,currentEmployeeId:'E-ENG-1'};result=staff.executeStaffTask(state,request);assert.ok(result.ok);state=result.state;
+ assert.equal(staff.staffTasks(state.events,state).find(i=>i.task.id==='T-M-1').category,'in_progress');
+ const repeat=staff.executeStaffTask(state,request);assert.equal(repeat.ok,false);assert.strictEqual(repeat.state,state);
+ result=staff.executeStaffTask(state,taskCommand(state,'T-M-1','complete'));assert.ok(result.ok);state=result.state;assert.equal(state.executionRecords.length,2);assert.equal(staff.staffTasks(state.events,state).find(i=>i.task.id==='T-M-1').category,'completed');
+ const housekeeper={...state,currentEmployeeId:'E-HK-2'};assert.equal(staff.staffTasks(housekeeper.events,housekeeper).find(i=>i.task.id==='T-CLEAN-2').category,'blocked');
+ assert.equal(h.currentBusinessTasks(state.events,state).find(t=>t.id==='T-M-1').verificationStatus,'unverified');
+});
+
+const tracking=await import(moduleUrl('src/data/executionOverview.ts'));
+test('C: scope references, shared task uniqueness and department totals use current view only',()=>{
+ const state=initial(),before=JSON.stringify(state);const current=tracking.executionOverview(state.events,state,'breakfast','event');const all=tracking.executionOverview(state.events,state,'arrival','all');
+ assert.deepEqual(current.items.map(i=>i.task.id).sort(),[...new Set(state.events.find(e=>e.id==='breakfast').businessRefs.businessTaskIds)].sort());
+ assert.equal(all.items.length,new Set(state.events.flatMap(e=>e.businessRefs.businessTaskIds)).size);assert.equal(all.items.filter(i=>i.task.id==='T-FRONT-CHECK').length,1);assert.equal(all.departments.reduce((n,d)=>n+d.total,0),all.items.length);assert.equal(all.items.find(i=>i.task.id==='T-FRONT-CHECK').relatedEvents.length,2);
+ const narrow=structuredClone(state);for(const e of narrow.events)e.businessRefs.businessTaskIds=e.id==='arrival'?['T-M-1']:['T-FRONT-CHECK'];assert.equal(tracking.executionOverview(narrow.events,narrow,'arrival','all').items.length,2,'unreferenced daily tasks excluded');assert.equal(JSON.stringify(state),before);
+});
+test('C: waiting vs current blockage vs deadline risk uses explicit business time, not host clock',()=>{
+ const state=approved();const future=tracking.executionOverview(state.events,state,'arrival','event');const clean=future.items.find(i=>i.task.id==='T-CLEAN-2');assert.ok(clean.waiting&&!clean.blocked&&!clean.late);assert.equal(future.metrics.blocked,0);
+ const due=tracking.executionOverview(state.events,state,'arrival','event','2026-11-01T12:00:00+08:00');assert.ok(due.items.find(i=>i.task.id==='T-CLEAN-2').blocked);assert.ok(!due.items.find(i=>i.task.id==='T-CLEAN-2').late);
+ const late=tracking.executionOverview(state.events,state,'arrival','event','2026-11-01T18:00:00+08:00');assert.ok(late.items.find(i=>i.task.id==='T-CLEAN-2').late);
+ const unknown=tracking.executionOverview(state.events,state,'arrival','event','unknown');assert.ok(unknown.items.find(i=>i.task.id==='T-CLEAN-2').waiting);assert.equal(unknown.metrics.blocked,0);assert.ok(unknown.items.every(i=>!i.late));
+});
+test('C: cross-department repair chain identifies real sources and transitive affected tasks',()=>{
+ const state=approved();const report=tracking.executionOverview(state.events,state,'arrival','event','2026-11-01T12:00:00+08:00');const clean=report.items.find(i=>i.task.id==='T-CLEAN-1');assert.equal(clean.sources.filter(s=>s.id==='T-M-1').length,1);assert.equal(clean.sources.find(s=>s.id==='T-M-1').task.departmentId,'engineering');assert.equal(clean.task.departmentId,'rooms');const downstream=report.downstream('T-M-1');assert.ok(downstream.includes('T-CLEAN-1')&&downstream.includes('T-CHECK-1')&&downstream.includes('T-DELIVER-1'));assert.ok(!downstream.includes('T-CLEAN-2'));
+});
+test('C: staff execution dynamically updates scope and department status without extra state',()=>{
+ let state={...approved(),currentEmployeeId:'E-ENG-1'};state=staff.executeStaffTask(state,taskCommand(state,'T-M-1','start')).state;
+ let report=tracking.executionOverview(state.events,state,'arrival','event');assert.equal(report.metrics.in_progress,1);assert.equal(report.departments.find(d=>d.id==='engineering').status,'执行中');
+ state=staff.executeStaffTask(state,taskCommand(state,'T-M-1','complete')).state;report=tracking.executionOverview(state.events,state,'arrival','all');assert.equal(report.metrics.completed,1);assert.equal(report.metrics.pending+report.metrics.in_progress+report.metrics.completed,report.items.length);assert.equal(report.records.filter(r=>r.taskId==='T-M-1').length,2);assert.equal(report.items.find(i=>i.task.id==='T-M-1').task.verificationStatus,'unverified');
+});
+test('C: exceptions are scoped/deduplicated; acknowledgement stays active, close does not release repair',()=>{
+ let state=approved();state=taskSuccess(state,taskCommand(state,'T-CLEAN-2','report_exception',{exceptionType:'delay',note:'等待维修，反馈给管理人员'}));const exceptionId=state.executionExceptions[0].exceptionId;
+ state={...state,executionExceptions:[...state.executionExceptions,...state.executionExceptions]};let report=tracking.executionOverview(state.events,state,'arrival','event','2026-11-01T12:00:00+08:00');assert.equal(report.metrics.openExceptions,1);assert.equal(report.departments.find(d=>d.id==='rooms').status,'存在待处理异常');assert.equal(tracking.executionOverview(state.events,state,'breakfast','event').exceptions.length,0);
+ const handle={exceptionId,actorName:'验收管理者',note:'核实维修进度，不修改资源',occurredAt:new Date(Date.now()+5000).toISOString()};state=execution.handleExecutionException(state,{...handle,action:'acknowledge'}).state;assert.equal(tracking.executionOverview(state.events,state,'arrival','event').metrics.openExceptions,1);
+ state=execution.handleExecutionException(state,{...handle,action:'close'}).state;report=tracking.executionOverview(state.events,state,'arrival','event','2026-11-01T12:00:00+08:00');assert.equal(report.metrics.openExceptions,0);assert.equal(report.departments.find(d=>d.id==='rooms').status,'部分受阻');assert.ok(report.items.find(i=>i.task.id==='T-CLEAN-2').blocked);assert.equal(h.currentMaintenanceOrders(state.events,state).find(m=>m.id==='M-2').status,'pending');assert.equal(report.exceptions[0].handlingRecords.length,2);
+});
+test('C: plan progress deduplicates task IDs, excludes support and remains applied after execution',()=>{
+ const {state,proposal}=fixture();const applied=x.applyApprovedProposal(state,proposal,meta());assert.ok(applied.ok);let next={...applied.state,currentEmployeeId:'E-FLEX-1'};next={...next,executionPlans:next.executionPlans.map(p=>({...p,affectedTaskIds:[...p.affectedTaskIds,...p.affectedTaskIds]}))};
+ let report=tracking.executionOverview(next.events,next,'arrival','all');assert.equal(report.plans[0].total,1);assert.equal(report.plans[0].done,0);const count=report.items.length;next=staff.executeStaffTask(next,taskCommand(next,'T-FRONT-CHECK','start',{eventId:'breakfast'})).state;next=staff.executeStaffTask(next,taskCommand(next,'T-FRONT-CHECK','complete',{eventId:'breakfast'})).state;report=tracking.executionOverview(next.events,next,'arrival','all');assert.equal(report.plans[0].done,1);assert.equal(report.plans[0].plan.status,'applied');assert.equal(report.items.length,count);assert.equal(report.plans[0].plan.supportReservations.length,1);assert.equal(report.items.filter(i=>i.task.id==='T-FRONT-CHECK').length,1);assert.ok(tracking.executionOverview(next.events,next,'arrival','event').plans.some(p=>p.plan.proposalId===proposal.id));
+ const snapshot=JSON.stringify(next);tracking.executionOverview(next.events,next,'arrival','all');assert.equal(JSON.stringify(next),snapshot);
+});
+test('C: missing referenced tasks and support-only plans are explicit, never a false 100%',()=>{
+ const state=initial();state.events[0].businessRefs.businessTaskIds.push('MISSING');const report=tracking.executionOverview(state.events,state,'arrival','event');assert.deepEqual(report.missing,['MISSING']);
+ const {state:source,proposal}=fixture();const applied=x.applyApprovedProposal(source,proposal,meta());assert.ok(applied.ok);const changed={...applied.state,executionPlans:applied.state.executionPlans.map(p=>({...p,affectedTaskIds:['MISSING']}))};const missing=tracking.executionOverview(changed.events,changed,'breakfast','event').plans[0];assert.equal(missing.total,1);assert.equal(missing.done,0);assert.deepEqual(missing.missing,['MISSING']);const supportOnly={...applied.state,executionPlans:applied.state.executionPlans.map(p=>({...p,affectedTaskIds:[]}))};assert.equal(tracking.executionOverview(supportOnly.events,supportOnly,'breakfast','event').plans[0].total,0);
+});
