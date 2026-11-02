@@ -1,3 +1,4 @@
+import {businessTime} from './data/businessWorkflow';
 import {businessText} from './data/businessLabels';
 import {useState} from 'react';
 import {employees,type TaskExecutionException,type ExecutionExceptionType} from './data/hotelDemo';
@@ -8,7 +9,7 @@ import {taskStartBlockReasons,exceptionTypeLabels,type TaskExecutionCommand,type
 export interface TaskExecutionFeedback {taskId:string;message:string}
 export function ExceptionReview({exception,onHandle,readOnly=false}:{readOnly?:boolean;exception:TaskExecutionException;onHandle:(command:ExceptionHandlingCommand)=>void}) {
   const [note,setNote]=useState('');
-  const handle=(action:'acknowledge'|'close')=>onHandle({exceptionId:exception.exceptionId,action,actorName:'演示管理者',occurredAt:new Date().toISOString(),note});
+  const handle=(action:'acknowledge'|'close')=>onHandle({exceptionId:exception.exceptionId,action,actorName:'演示管理者',occurredAt:exception.updatedAt,note});
   return <div className="coord-task-exception">
     <p><strong>{exceptionTypeLabels[exception.exceptionType]}</strong> · {{open:'待处理',acknowledged:'已确认',closed:'已处理'}[exception.status]}</p>
     <p>报告人 {businessText(exception.reportedBy)} · {businessText(exception.createdAt)}</p>
@@ -28,9 +29,10 @@ export function TaskExecutionActions({view,eventId,taskId,onExecute,onHandle,fee
   const blockers=taskStartBlockReasons(taskId,view.events,view);
   const records=(view.executionRecords||[]).filter(r=>r.taskId===taskId);
   const exceptions=(view.executionExceptions||[]).filter(e=>e.taskId===taskId);
-  const actorEmployeeId=employeeId??task.assignedEmployeeId;
+  const actorEmployeeId=employeeId;
+  if(!actorEmployeeId)return <div className="coord-task-operations"><p>执行状态：{task.executionStatus} · 业务验证：{task.verificationStatus}</p><p>负责人：{task.assignedEmployeeId}</p>{exceptions.map(exception=><ExceptionReview key={exception.exceptionId} exception={exception} onHandle={onHandle}/>)}<ol>{records.map(record=><li key={record.recordId}>{record.occurredAt} · {record.actorEmployeeId} · {record.action} · {record.note}</li>)}</ol></div>;
   if(actorEmployeeId!==task.assignedEmployeeId)return <p>该任务未分配给当前模拟员工。</p>;
-  const execute=(action:'start'|'complete')=>onExecute({action,taskId,eventId,actorEmployeeId,occurredAt:new Date().toISOString(),note});
+  const execute=(action:'start'|'complete')=>onExecute({action,taskId,eventId,actorEmployeeId,occurredAt:businessTime(view),note});
   return <div className="coord-task-operations">
     <small>{employeeId?'员工演示：':'管理演示：以当前负责人 '}{employees.find(e=>e.id===actorEmployeeId)?.name}（{actorEmployeeId}）身份模拟，并记录操作人。</small>
     {task.executionStatus==='pending'&&blockers.length>0&&<ul aria-label="开始任务的阻塞原因">{blockers.map(reason=><li key={reason}>{reason}</li>)}</ul>}
@@ -41,7 +43,7 @@ export function TaskExecutionActions({view,eventId,taskId,onExecute,onHandle,fee
     <details><summary>执行反馈、异常与操作记录</summary>
       <label>执行反馈 / 异常说明<textarea aria-label={'执行反馈 '+taskId} value={note} onChange={e=>setNote(e.target.value)}/></label>
       <label>异常类型<select aria-label={'异常类型 '+taskId} value={exceptionType} onChange={e=>setExceptionType(e.target.value as ExecutionExceptionType)}>{Object.entries(exceptionTypeLabels).map(([id,label])=><option key={id} value={id}>{label}</option>)}</select></label>
-      <button disabled={!note.trim()} onClick={()=>onExecute({action:'report_exception',taskId,eventId,actorEmployeeId,occurredAt:new Date().toISOString(),exceptionType,note})}>报告执行异常</button>
+      <button disabled={!note.trim()} onClick={()=>onExecute({action:'report_exception',taskId,eventId,actorEmployeeId,occurredAt:businessTime(view),exceptionType,note})}>报告执行异常</button>
       <small>异常报告保留执行状态；未关闭异常会阻止待执行任务启动。需要资源调整时，重新进入分析和协调方案流程。</small>
       {showExceptions&&exceptions.map(exception=><ExceptionReview key={exception.exceptionId} exception={exception} onHandle={onHandle} readOnly={!!employeeId}/>)}
       <h4>唯一任务执行记录 · {records.length} 条</h4>

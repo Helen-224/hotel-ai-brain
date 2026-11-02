@@ -1,5 +1,6 @@
+import {businessTime,roomDeliveryReasons} from './businessWorkflow';
 import {
-  bookings, currentBusinessTasks, currentMaintenanceOrders, employees, shifts,
+  hasTaskAuthorization, bookings, currentBusinessTasks, currentMaintenanceOrders, employees, shifts,
   type BusinessContext, type OperationEvent, type TaskExecutionException,
   type TaskExecutionRecord, type ExecutionExceptionType,
 } from './hotelDemo';
@@ -72,12 +73,17 @@ function eventRecord(events:OperationEvent[],eventId:string,id:string,time:strin
 
 // 所有失败均返回原引用；成功一次性返回状态、事件投影和唯一任务记录。
 export function executeTask(state:HotelBusinessState,command:TaskExecutionCommand):TaskOperationResult {
+  if(!state.currentEmployeeId||state.currentEmployeeId!==command.actorEmployeeId)return fail(state,'缺少当前模拟员工身份或执行人身份不一致');
   if(!['start','complete','report_exception'].includes(command.action))return fail(state,'不支持的任务操作');
   const task=currentBusinessTasks(state.events,state).find(t=>t.id===command.taskId);
   if(!task)return fail(state,'任务不存在');
   const event=state.events.find(e=>e.id===command.eventId);
   if(!event?.businessRefs?.businessTaskIds.includes(task.id))return fail(state,'任务不属于指定运营事件');
   if(!employees.some(e=>e.id===command.actorEmployeeId)||task.assignedEmployeeId!==command.actorEmployeeId)return fail(state,'只有当前有效负责人可以执行或报告该任务');
+  if(!hasTaskAuthorization(task.id,state))return fail(state,'任务尚未正式派发给当前员工');
+  if(command.occurredAt!==businessTime(state))return fail(state,'操作时间必须使用当前模拟业务时间');
+  if(command.action==='start'&&date(businessTime(state))<date(task.plannedStartAt))return fail(state,'尚未到计划执行时间');
+  if(command.action==='complete'&&task.taskType==='delivery'&&task.roomId&&roomDeliveryReasons(state,task.roomId).length)return fail(state,'客房交付条件尚未满足');
   if(!Number.isFinite(date(command.occurredAt)))return fail(state,'操作时间无效');
   const records=state.executionRecords||[],exceptions=state.executionExceptions||[];
   const latest=records.filter(r=>r.taskId===task.id).at(-1);
@@ -110,10 +116,11 @@ export function executeTask(state:HotelBusinessState,command:TaskExecutionComman
     next={...state,taskExecutions:{...state.taskExecutions,[task.id]:execution},events:state.events.map(e=>({...e,tasks:e.tasks.map(t=>t.id===task.id?{...t,status}:t)}))};
   }
   const text=record.action==='started'?'开始执行':record.action==='completed'?'执行完成（结果未验证）':'报告异常：'+exceptionTypeLabels[(command as Extract<TaskExecutionCommand,{action:'report_exception'}>).exceptionType];
-  return {ok:true,state:{...next,currentEmployeeId:command.actorEmployeeId,revision:state.revision+1,executionRecords:[...records,record],events:eventRecord(next.events,event.id,recordId,command.occurredAt,`${task.id} · ${command.actorEmployeeId} · ${text}${common.note?' · '+common.note:''}`)},message:record.action==='exception_reported'?'异常已记录，任务安排和执行状态未改变':text};
+  return {ok:true,state:{...next,revision:state.revision+1,executionRecords:[...records,record],events:eventRecord(next.events,event.id,recordId,command.occurredAt,`${task.id} · ${command.actorEmployeeId} · ${text}${common.note?' · '+common.note:''}`)},message:record.action==='exception_reported'?'异常已记录，任务安排和执行状态未改变':text};
 }
 
 export function handleExecutionException(state:HotelBusinessState,command:ExceptionHandlingCommand):TaskOperationResult {
+  if(state.currentEmployeeId||state.actorRole==='staff')return fail(state,'工作人员不能处理管理异常');
   if(!['acknowledge','close'].includes(command.action))return fail(state,'不支持的异常处理操作');
   const exception=state.executionExceptions?.find(e=>e.exceptionId===command.exceptionId);
   if(!exception)return fail(state,'执行异常不存在');

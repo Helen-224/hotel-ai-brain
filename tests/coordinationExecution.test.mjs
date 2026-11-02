@@ -16,12 +16,14 @@ const r=await import(moduleUrl('src/data/resourceCoordination.ts'));
 const a=await import(moduleUrl('src/data/agentAnalysis.ts'));
 const x=await import(moduleUrl('src/data/coordinationExecution.ts'));
 const execution=await import(moduleUrl('src/data/taskExecution.ts'));
+// Legacy execution fixtures explicitly select their actor; raw-engine security tests below bypass this adapter.
+function executeSelected(state,input){const selected={...state,simulatedAt:input.occurredAt,currentEmployeeId:input.actorEmployeeId};const result=execution.executeTask(selected,input);return result.state===selected?{...result,state}:{...result,state:{...result.state,currentEmployeeId:state.currentEmployeeId}};}
 const seedSnapshot=JSON.stringify([h.businessTasks,h.rooms,h.bookings,h.maintenanceOrders,h.employees,h.shifts,h.operationEvents]);
 const initial=()=>({events:structuredClone(h.operationEvents),revision:0,taskOverrides:{},supportReservations:[],executionPlans:[]});
 const command=(state,eventId,action,taskId)=>{
  if(action!=='advance')return {...state,events:h.transitionEvents(state.events,eventId,action,taskId,state)};
  const task=h.currentBusinessTasks(state.events,state).find(t=>t.id===taskId);
- const result=execution.executeTask(state,{eventId,taskId,action:task.executionStatus==='pending'?'start':'complete',actorEmployeeId:task.assignedEmployeeId,occurredAt:new Date().toISOString()});
+ const result=executeSelected(state,{eventId,taskId,action:task.executionStatus==='pending'?'start':'complete',actorEmployeeId:task.assignedEmployeeId,occurredAt:new Date().toISOString()});
  assert.ok(result.ok,result.message);return result.state;
 };
 function fixture(){
@@ -123,9 +125,9 @@ test('original shared tasks, maintenance realtime state and result verification 
 const taskCommand=(state,taskId,action,extra={})=>({eventId:'arrival',taskId,action,actorEmployeeId:h.currentBusinessTasks(state.events,state).find(t=>t.id===taskId)?.assignedEmployeeId||'E-ENG-1',occurredAt:new Date(Date.now()+2000).toISOString(),...extra});
 const approved=()=>command(initial(),'arrival','approve');
 function taskRejects(state,input,pattern){
- const snapshot=JSON.stringify(state);const result=execution.executeTask(state,input);assert.equal(result.ok,false,result.message);assert.match(result.message,pattern);assert.strictEqual(result.state,state);assert.equal(JSON.stringify(state),snapshot);
+ const snapshot=JSON.stringify(state);const result=executeSelected(state,input);assert.equal(result.ok,false,result.message);assert.match(result.message,pattern);assert.strictEqual(result.state,state);assert.equal(JSON.stringify(state),snapshot);
 }
-function taskSuccess(state,input){const snapshot=JSON.stringify(state);const result=execution.executeTask(state,input);assert.ok(result.ok,result.message);assert.equal(JSON.stringify(state),snapshot);return result.state;}
+function taskSuccess(state,input){const snapshot=JSON.stringify(state);const result=executeSelected(state,input);assert.ok(result.ok,result.message);assert.equal(JSON.stringify(state),snapshot);return result.state;}
 test('A: dependencies, maintenance blockers, owner, approval and invalid context deny without writes',()=>{
  const state=approved();taskRejects(state,taskCommand(state,'T-CLEAN-2','start'),/前置任务|维修阻塞/);
  taskRejects(state,taskCommand(state,'T-M-1','start',{actorEmployeeId:'E-HK-1'}),/有效负责人/);
@@ -172,7 +174,7 @@ test('A: reports do not alter task arrangement, status, approval, support or ver
  let state=approved();const before=h.currentBusinessTasks(state.events,state),version=h.businessFingerprint(state.events,state);
  state=taskSuccess(state,taskCommand(state,'T-M-1','report_exception',{exceptionType:'new_issue',note:'发现新的异响，需人工复核'}));
  assert.deepEqual(h.currentBusinessTasks(state.events,state),before);assert.notEqual(h.businessFingerprint(state.events,state),version);assert.deepEqual(state.taskOverrides,{});assert.deepEqual(state.executionPlans,[]);assert.deepEqual(state.supportReservations,[]);assert.equal(state.events[0].approval,'approved');assert.equal(state.executionRecords[0].action,'exception_reported');taskRejects(state,taskCommand(state,'T-M-1','start'),/尚未解除的执行异常/);
- const duplicate=execution.executeTask(state,taskCommand(state,'T-M-1','report_exception',{exceptionType:'new_issue',note:'发现新的异响，需人工复核'}));assert.strictEqual(duplicate.state,state);assert.equal(state.executionRecords.length,1);
+ const duplicate=executeSelected(state,taskCommand(state,'T-M-1','report_exception',{exceptionType:'new_issue',note:'发现新的异响，需人工复核'}));assert.strictEqual(duplicate.state,state);assert.equal(state.executionRecords.length,1);
  taskRejects(state,taskCommand(state,'T-M-1','report_exception',{exceptionType:'delay',note:'  '}),/说明/);taskRejects(state,taskCommand(state,'T-M-1','report_exception',{exceptionType:'invented',note:'test'}),/类型/);
 });
 test('A: manager acknowledgement/close are independent and retain actor, note and time',()=>{
@@ -257,4 +259,50 @@ test('C: plan progress deduplicates task IDs, excludes support and remains appli
 test('C: missing referenced tasks and support-only plans are explicit, never a false 100%',()=>{
  const state=initial();state.events[0].businessRefs.businessTaskIds.push('MISSING');const report=tracking.executionOverview(state.events,state,'arrival','event');assert.deepEqual(report.missing,['MISSING']);
  const {state:source,proposal}=fixture();const applied=x.applyApprovedProposal(source,proposal,meta());assert.ok(applied.ok);const changed={...applied.state,executionPlans:applied.state.executionPlans.map(p=>({...p,affectedTaskIds:['MISSING']}))};const missing=tracking.executionOverview(changed.events,changed,'breakfast','event').plans[0];assert.equal(missing.total,1);assert.equal(missing.done,0);assert.deepEqual(missing.missing,['MISSING']);const supportOnly={...applied.state,executionPlans:applied.state.executionPlans.map(p=>({...p,affectedTaskIds:[]}))};assert.equal(tracking.executionOverview(supportOnly.events,supportOnly,'breakfast','event').plans[0].total,0);
+});
+
+ test('engine rejects missing identity and impersonation without changing state',()=>{
+ const state=approved();const input=taskCommand(state,'T-M-1','start');
+ for(const selected of [state,{...state,currentEmployeeId:'E-HK-1'}]){
+ const before=JSON.stringify(selected);const result=execution.executeTask(selected,input);
+ assert.equal(result.ok,false);assert.strictEqual(result.state,selected);assert.equal(JSON.stringify(selected),before);
+ }
+ const selected={...state,currentEmployeeId:input.actorEmployeeId};assert.equal(execution.executeTask(selected,input).ok,true);
+ });
+
+const workflow=await import(moduleUrl('src/data/businessWorkflow.ts'));
+test('formal dispatch requires approved created event and retains redispatch history',()=>{
+ let state=initial();assert.strictEqual(workflow.dispatchTask(state,'arrival','T-M-1'),state);
+ state=command(command(state,'arrival','approve'),'arrival','create');
+ const next=workflow.dispatchTask(state,'arrival','T-M-1');assert.equal(next.dispatchHistory.length,1);
+ assert.strictEqual(workflow.dispatchTask(next,'arrival','T-M-1'),next);
+ const employee={...next,currentEmployeeId:'E-ENG-1'};assert.strictEqual(workflow.dispatchTask(employee,'arrival','T-M-1'),employee);
+ const changed={...next,taskOverrides:{...next.taskOverrides,'T-M-1':{assignedEmployeeId:'E-HK-1'}}};
+ const again=workflow.dispatchTask(changed,'arrival','T-M-1');assert.equal(again.dispatchHistory.length,2);assert.notEqual(again.dispatchHistory[0].dispatchId,again.dispatchHistory[1].dispatchId);
+});
+test('staff cannot approve event, approve proposal, apply proposal or verify results',()=>{
+ const {state,proposal,candidates}=fixture();const staffState={...state,currentEmployeeId:'E-ENG-1',actorRole:'staff'};
+ assert.strictEqual(h.transitionEvents(staffState.events,'vip','approve',undefined,staffState),staffState.events);
+ assert.strictEqual(r.approveProposal(candidates[0],staffState.events,'approved',candidates,'denied',undefined,staffState),candidates[0]);
+ const result=x.applyApprovedProposal(staffState,proposal,meta());assert.equal(result.ok,false);assert.strictEqual(result.state,staffState);
+ assert.strictEqual(workflow.verifyTask(staffState,'T-M-1',true,'denied'),staffState);
+});
+
+test('execution context is scoped and manager operations remain available',()=>{
+ let state=approved();const result=executeSelected(state,taskCommand(state,'T-M-1','report_exception',{exceptionType:'delay',note:'context isolation'}));assert.equal(result.ok,true);state=result.state;
+ assert.equal(state.currentEmployeeId,undefined);
+ const approvedVip=h.transitionEvents(state.events,'vip','approve',undefined,state);assert.equal(approvedVip.find(e=>e.id==='vip').approval,'approved');
+ const handled=execution.handleExecutionException(state,{exceptionId:state.executionExceptions[0].exceptionId,action:'acknowledge',actorName:'演示管理者',occurredAt:state.executionExceptions[0].createdAt,note:'confirmed'});assert.equal(handled.ok,true);
+});
+test('failed repair needs another completed attempt and preserves all history',()=>{
+ let state=approved();state=taskSuccess(state,taskCommand(state,'T-M-1','start'));state=taskSuccess(state,taskCommand(state,'T-M-1','complete'));
+ state=workflow.verifyTask(state,'T-M-1',false,'still broken');assert.equal(state.verifications.length,1);
+ assert.strictEqual(workflow.verifyTask(state,'T-M-1',true,'without repair'),state);
+ state=workflow.reopenFailedTask(state,'T-M-1');assert.equal(state.executionRecords.length,2);assert.strictEqual(workflow.verifyTask(state,'T-M-1',true,'not completed'),state);
+ state={...state,simulatedAt:'2026-11-10T10:00:00+08:00'};
+ state=taskSuccess(state,taskCommand(state,'T-M-1','start',{occurredAt:state.simulatedAt}));state=taskSuccess(state,taskCommand(state,'T-M-1','complete',{occurredAt:state.simulatedAt}));state=workflow.verifyTask(state,'T-M-1',true,'repaired');
+ assert.equal(state.verifications.length,2);assert.equal(state.verifications[0].passed,false);assert.equal(state.executionRecords.length,4);assert.equal(h.currentMaintenanceOrders(state.events,state)[0].verificationStatus,'verified');
+});
+test('unverified business tasks cannot resolve an event',()=>{
+ const state=approved();assert.ok(workflow.eventResolutionReasons(state,'arrival').length);assert.strictEqual(workflow.resolveEvent(state,'arrival','premature'),state);assert.ok(workflow.roomDeliveryReasons(state,h.rooms[0].id).length);
 });

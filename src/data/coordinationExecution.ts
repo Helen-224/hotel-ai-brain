@@ -19,6 +19,7 @@ export function applicationEligibility(state:HotelBusinessState,proposal:Proposa
 export type ApplyResult={ok:true;state:HotelBusinessState;plan:CoordinationExecutionPlan;alreadyApplied:boolean}|{ok:false;state:HotelBusinessState;errors:string[]};
 // 所有校验在提交前完成；调用方只用一次状态更新接收返回值。
 export function applyApprovedProposal(state:HotelBusinessState,proposal:Proposal,meta:{appliedAt:string;appliedBy:string}):ApplyResult{
+ if(state.currentEmployeeId||state.actorRole==='staff')return {ok:false,state,errors:['工作人员不能应用资源方案']};
  const check=applicationEligibility(state,proposal);
  if(check.existing)return {ok:true,state,plan:check.existing,alreadyApplied:true};
  if(!check.canApply)return {ok:false,state,errors:check.reasons};

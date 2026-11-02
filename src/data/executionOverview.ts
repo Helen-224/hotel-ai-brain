@@ -3,7 +3,7 @@ import type {HotelBusinessState} from './coordinationExecution';
 import {taskStartBlockReasons} from './taskExecution';
 
 export type ExecutionScope='event'|'all';
-export function executionOverview(events:OperationEvent[],view:HotelBusinessState,eventId:string,scope:ExecutionScope,at=snapshot.at) {
+export function executionOverview(events:OperationEvent[],view:HotelBusinessState,eventId:string,scope:ExecutionScope,at=view.simulatedAt||snapshot.at) {
   const selectedEvents=events.filter(e=>scope==='all'||e.id===eventId);
   const ids=new Set(selectedEvents.flatMap(e=>e.businessRefs?.businessTaskIds||[]));
   const all=currentBusinessTasks(events,view),byId=new Map(all.map(t=>[t.id,t]));

@@ -1,10 +1,10 @@
-import {currentBusinessTasks,employees,type BusinessContext,type OperationEvent} from './hotelDemo';
+import {hasTaskAuthorization,currentBusinessTasks,employees,type BusinessContext,type OperationEvent} from './hotelDemo';
 import {executeTask,taskStartBlockReasons,type TaskExecutionCommand} from './taskExecution';
 import type {HotelBusinessState} from './coordinationExecution';
 
 export function staffTasks(events:OperationEvent[],view:BusinessContext) {
   if(!employees.some(e=>e.id===view.currentEmployeeId))return [];
-  return currentBusinessTasks(events,view).filter(t=>t.assignedEmployeeId===view.currentEmployeeId).map(task=>{
+  return currentBusinessTasks(events,view).filter(t=>t.assignedEmployeeId===view.currentEmployeeId&&hasTaskAuthorization(t.id,view)).map(task=>{
     const related=events.filter(e=>e.businessRefs?.businessTaskIds.includes(task.id));
     const event=related.find(e=>e.approval==='approved')||related[0];
     const reasons=taskStartBlockReasons(task.id,events,view);
