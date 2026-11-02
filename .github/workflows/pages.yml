@@ -27,7 +27,14 @@ jobs:
       - run: npm run build
         env:
           GITHUB_PAGES: 'true'
-      - run: cp dist/index.html dist/404.html
+      - name: Generate static entry pages for demo routes
+        shell: bash
+        run: |
+          cp dist/index.html dist/404.html
+          for route in app app/management app/owner app/coordination app/departments app/tasks app/approvals app/records app/settings app/insights; do
+            mkdir -p "dist/$route"
+            cp dist/index.html "dist/$route/index.html"
+          done
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
