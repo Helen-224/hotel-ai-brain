@@ -23,7 +23,7 @@ export function ManagementOverview({events,view}:{events:OperationEvent[];view:B
   <section className="overview-kpis" aria-label="入住与接待概况">
    {[['当前入住率',`${s.todayRate}%`,`${s.today} 间在住 / ${s.totalRooms} 间客房`],['明日预计入住率',`${s.tomorrowRate}%`,`较当前增加 ${s.tomorrow-s.today} 间在住`],['明日到店',`${valid.filter(b=>b.checkInAt.startsWith(snapshot.tomorrowAt.slice(0,10))).length}`,`间客房 · 含 ${s.vip} 间 VIP 预订`],['明日离店',`${valid.filter(b=>b.checkOutAt.startsWith(snapshot.tomorrowAt.slice(0,10))).length}`,'间客房 · 关注退房后的清洁衔接']].map(([label,value,note])=><article key={label}><p>{label}</p><strong>{value}</strong><small>{note}</small></article>)}
   </section>
-  <div className="overview-columns">
+  <section className="platform-card"><h2>AI 运营判断 · 模拟业务摘要</h2>{open[0]?<><h3>{open[0].title}</h3><p>{facts[open[0].id]||open[0].summary}</p><p>依据：{open[0].evidence[0]||open[0].summary}</p><a href={import.meta.env.BASE_URL+'app/coordination?event='+open[0].id+'&tab=analysis'}>查看专业分析 →</a></>:<p>当前没有未解决运营事件。</p>}<small>按现有事件风险优先展示，不代表新增实时模型分析。</small></section><div className="overview-columns">
    <section className="platform-card overview-attention"><div className="overview-section-heading"><h2>需要关注</h2><span>{open.length} 项未解决</span></div>
     {open.length?open.map(e=><article className="overview-event" key={e.id}><div><span className={e.risk==='高'?'overview-priority':'overview-normal'}>{e.risk==='高'?'优先关注':'待跟进'}</span><h3>{e.title}</h3></div><p>{facts[e.id]||e.summary}</p><footer><small>{hotel.departments.filter(d=>e.departmentIds.includes(d.id)).map(d=>d.name).join(' · ')}</small><a href={`/app/coordination?event=${e.id}&tab=analysis`}>查看并处理 →</a></footer></article>):<p>暂无未解决的运营事项。</p>}
    </section>
