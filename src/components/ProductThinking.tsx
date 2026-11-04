@@ -5,11 +5,11 @@ export function ProductThinking() {
     ['跟进结果', '让员工获得清晰且有上下文的任务，持续跟进执行、交接和结果验证，让住客需求得到连贯响应。'],
   ];
   return <section id="why" className="collaboration-thinking">
-    <span className="eyebrow">01 / 产品构想</span>
+    <span className="eyebrow">06 / 产品构想</span>
     <h2>一个理解全局、<br className="vision-break"/>推动协作的智能运营大脑。</h2>
     <p className="vision-origin">酒店并不缺少系统、数据和岗位，难的是让信息与行动真正连接起来。</p>
     <div className="thinking-intro">
-      <p>这个想法源于我对酒店日常运营的观察：信息分散在不同部门、系统和沟通渠道中，经营目标、现场问题与具体任务之间缺少有效关联。管理者难以及时掌握全局，员工也需要反复确认任务背景、优先级和交接信息。很多问题并非没有人负责，而是缺少看清全局、发现问题并组织协作的机制。</p>
+      <p>行业报告提供了单店提效的背景，前厅访谈提示了信息交接的摩擦，竞品资料则展示了现有工具在任务协作和客房调度上的能力。由此提出一个待验证的问题：能否将分散在部门和系统里的信息，转化为一致的运营判断和跨部门行动？</p>
       <p>因此，我提出 <strong>Hotel AI Brain（酒店智能运营大脑）</strong>：在酒店现有业务系统之上，建立一层智能运营协调能力。汇集运营信息，理解业务状态与任务依赖，识别风险、分析影响、规划协作，并在获得授权后推动执行、持续跟进与结果验证。让管理者、员工和不同部门围绕同一经营目标，形成共同的运营认知。</p>
     </div>
     <div className="positioning-problems">{links.map(([title, copy], i) => <article key={title}><span>0{i + 1}</span><h3>{title}</h3><p>{copy}</p></article>)}</div>
